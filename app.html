@@ -415,7 +415,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);-webk
         el('div',{style:{fontSize:48,marginBottom:16}},'🎵'),
         el('h3',null,'Search for music'),
         el('p',null,'Find songs, artists, or radio stations'),
-        el('div',{style:{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center',marginTop:16}},SEARCHES.slice(0,6).map(function(q){ return el('button',{className:'chip',innerHTML:q,onclick:function(){input.value=q;input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));}}; }))
+        el('div',{style:{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center',marginTop:16}},SEARCHES.slice(0,6).map(function(q){ return el('button',{className:'chip',innerHTML:q,onclick:function(){input.value=q;input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));}}); }))
       ));
     }else if(state.searchTab==='music'){
       var ml = el('div',{className:'tlist'});
