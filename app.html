@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="description" content="Pothole — Free Online Music Streaming">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<title>Pothole — Music Streaming</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0a0f;--bg2:#12121a;--bg3:#1a1a25;--card:#16161f;--hover:#222230;--active:#2a2a3a;--accent:#8b5cf6;--accent2:#a78bfa;--accent-dark:#7c3aed;--pink:#ec4899;--glow:rgba(139,92,246,.3);--text:#f0f0f5;--text2:#9999aa;--text3:#666677;--border:#2a2a35;--danger:#ef4444;--success:#22c55e;--r:12px;--r2:16px;--r3:24px}
+html,body,#root{height:100%;width:100%;overflow:hidden}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--active);border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fade-in{animation:fadeIn .3s ease-out}
+.slide-up{animation:slideUp .4s ease-out}
+.spin{animation:spin 1s linear infinite}
+input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer;height:4px;width:100%}
+input[type=range]::-webkit-slider-runnable-track{height:4px;background:var(--active);border-radius:2px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);margin-top:-5px;box-shadow:0 0 8px var(--glow)}
+button{cursor:pointer;border:none;background:none;color:inherit;font:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script type="module">
+const{createElement:ce,useState,useEffect,useRef,useCallback,Fragment}=React;
+const{createRoot}=ReactDOM;
+
+// AUDIO ENGINE
+const audio=new Audio();audio.crossOrigin='anonymous';
+let state={isPlaying:false,position:0,duration:0,volume:.8,currentTrack:null,isLoading:false,error:null};
+let listeners=new Set();let ticker=null;
+const notify=()=>listeners.forEach(fn=>fn({...state}));
+const startTicker=()=>{stopTicker();ticker=setInterval(()=>{state.position=audio.currentTime;notify()},500)};
+const stopTicker=()=>{if(ticker){clearInterval(ticker);ticker=null}};
+audio.addEventListener('loadedmetadata',()=>{state.duration=audio.duration||0;state.isLoading=false;notify()});
+audio.addEventListener('canplay',()=>{state.isLoading=false;notify()});
+audio.addEventListener('playing',()=>{state.isPlaying=true;state.isLoading=false;startTicker();notify()});
+audio.addEventListener('pause',()=>{state.isPlaying=false;stopTicker();notify()});
+audio.addEventListener('ended',()=>{state.isPlaying=false;state.position=0;stopTicker();notify()});
+audio.addEventListener('error',()=>{state.isLoading=false;state.error='Failed to load stream';stopTicker();notify()});
+audio.addEventListener('waiting',()=>{state.isLoading=true;notify()});
+const playTrack=async t=>{state.currentTrack=t;state.isLoading=true;state.error=null;state.position=0;notify();audio.src=t.streamUrl;audio.load();try{await audio.play()}catch(e){state.isLoading=false;state.error=e.message||'Playback failed';notify()}};
+const pause=()=>audio.pause();const resume=()=>audio.play();
+const stopF=()=>{audio.pause();audio.src='';state.currentTrack=null;state.position=0;notify()};
+const seek=pos=>{audio.currentTime=pos;state.position=pos;notify()};
+const setVol=v=>{state.volume=Math.max(0,Math.min(1,v));audio.volume=state.volume;notify()};
+const subscribe=fn=>{listeners.add(fn);return()=>listeners.delete(fn)};
+
+// API
+const RADIO_API='https://de1.api.radio-browser.info/json';
+const JAMENDO_API='https://api.jamendo.com/v3.0';
+const searchRadio=async(q,l=30)=>{const r=await fetch(`${RADIO_API}/stations/search?name=${encodeURIComponent(q)}&limit=${l}&hidebroken=true&order=votes&reverse=true`);return r.json()};
+const getTopRadio=async(l=20)=>{const r=await fetch(`${RADIO_API}/stations/topvote/${l}`);return r.json()};
+const getRadioGenre=async(g,l=20)=>{const r=await fetch(`${RADIO_API}/stations/bytag/${encodeURIComponent(g)}?limit=${l}&hidebroken=true&order=votes&reverse=true`);return r.json()};
+const searchJamendo=async(q,l=30)=>{const r=await fetch(`${JAMENDO_API}/tracks/?client_id=2c9a11b6&format=json&limit=${l}&namesearch=${encodeURIComponent(q)}&include=musicinfo&audioformat=mp32`);const d=await r.json();return d.results||[]};
+const getJamendoCharts=async(l=20)=>{const r=await fetch(`${JAMENDO_API}/tracks/?client_id=2c9a11b6&format=json&limit=${l}&order=popularity_total&audioformat=mp32`);const d=await r.json();return d.results||[]};
+const getJamendoGenre=async(g,l=20)=>{const r=await fetch(`${JAMENDO_API}/tracks/?client_id=2c9a11b6&format=json&limit=${l}&tags=${encodeURIComponent(g)}&order=popularity_total&audioformat=mp32`);const d=await r.json();return d.results||[]};
+const radioToTrack=s=>({id:s.stationuuid,name:s.name,artist:s.country||'Radio',artwork:s.favicon,streamUrl:s.url_resolved||s.url,source:'radio'});
+const jamendoToTrack=t=>({id:t.id,name:t.name,artist:t.artist_name,album:t.album_name,artwork:t.album_image,streamUrl:t.audio,duration:t.duration,source:'jamendo'});
+const GENRES=['pop','rock','hip hop','electronic','jazz','classical','r&b','country','latin','indie','metal','folk','blues','reggae','soul','funk','ambient','lo-fi','afrobeats','bongo','gengetone','amapiano','gospel','benga'];
+const SEARCHES=['lo-fi','afrobeats','bongo','amapiano','gengetone','gospel','r&b','hip hop','reggae','jazz'];
+
+// ICONS
+const Icon=({name,size=18})=>{
+  const p={width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'};
+  const i={
+    home:()=>ce('svg',p,ce('path',{d:'M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z'}),ce('polyline',{points:'9 22 9 12 15 12 15 22'})),
+    search:()=>ce('svg',p,ce('circle',{cx:11,cy:11,r:8}),ce('line',{x1:21,y1:21,x2:16.65,y2:16.65})),
+    radio:()=>ce('svg',p,ce('circle',{cx:12,cy:12,r:2}),ce('path',{d:'M16.24 7.76a6 6 0 010 8.49m-8.48-.01a6 6 0 010-8.49m11.31-2.82a10 10 0 010 14.14m-14.14 0a10 10 0 010-14.14'})),
+    music:()=>ce('svg',p,ce('path',{d:'M9 18V5l12-2v13'}),ce('circle',{cx:6,cy:18,r:3}),ce('circle',{cx:18,cy:16,r:3})),
+    heart:()=>ce('svg',p,ce('path',{d:'M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z'})),
+    play:()=>ce('svg',p,ce('polygon',{points:'5 3 19 12 5 21 5 3'})),
+    pause:()=>ce('svg',p,ce('rect',{x:6,y:4,width:4,height:16}),ce('rect',{x:14,y:4,width:4,height:16})),
+    skipBack:()=>ce('svg',p,ce('polygon',{points:'19 20 9 12 19 4 19 20'}),ce('line',{x1:5,y1:19,x2:5,y2:5})),
+    skipForward:()=>ce('svg',p,ce('polygon',{points:'5 4 15 12 5 20 5 4'}),ce('line',{x1:19,y1:5,x2:19,y2:19})),
+    volume:()=>ce('svg',p,ce('polygon',{points:'11 5 6 9 2 9 2 15 6 15 11 19 11 5'}),ce('path',{d:'M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07'})),
+    volumeX:()=>ce('svg',p,ce('polygon',{points:'11 5 6 9 2 9 2 15 6 15 11 19 11 5'}),ce('line',{x1:23,y1:9,x2:17,y2:15}),ce('line',{x1:17,y1:9,x2:23,y2:15})),
+    disc:()=>ce('svg',p,ce('circle',{cx:12,cy:12,r:10}),ce('circle',{cx:12,cy:12,r:3})),
+    list:()=>ce('svg',p,ce('line',{x1:8,y1:6,x2:21,y2:6}),ce('line',{x1:8,y1:12,x2:21,y2:12}),ce('line',{x1:8,y1:18,x2:21,y2:18}),ce('line',{x1:3,y1:6.5,x2:3.01,y2:6.5}),ce('line',{x1:3,y1:12.5,x2:3.01,y2:12.5}),ce('line',{x1:3,y1:18.5,x2:3.01,y2:18.5})),
+    chevron:()=>ce('svg',p,ce('polyline',{points:'9 18 15 12 9 6'})),
+    x:()=>ce('svg',p,ce('line',{x1:18,y1:6,x2:6,y2:18}),ce('line',{x1:6,y1:6,x2:18,y2:18})),
+    arrowLeft:()=>ce('svg',p,ce('line',{x1:19,y1:12,x2:5,y2:12}),ce('polyline',{points:'12 19 5 12 12 5'})),
+  };
+  return i[name]?i[name]():null;
+};
+const fmt=s=>{if(!s||!isFinite(s))return'0:00';const m=Math.floor(s/60),sec=Math.floor(s%60);return`\${m}:\${sec.toString().padStart(2,'0')}`};
+
+// COMPONENTS
+function TrackCard({track}){
+  const[st,setSt]=useState(state);useEffect(()=>subscribe(setSt),[]);
+  const active=st.currentTrack?.id===track.id;
+  return ce('div',{className:`card\${active?' active':''}`,style:{background:'var(--card)',borderRadius:'var(--r)',overflow:'hidden',cursor:'pointer',transition:'.2s',border:'1px solid transparent'},onClick:()=>playTrack(track)},
+    ce('div',{style:{position:'relative',aspectRatio:'1',background:'var(--bg3)',overflow:'hidden'}},
+      track.artwork?ce('img',{src:track.artwork,alt:'',style:{width:'100%',height:'100%',objectFit:'cover'},loading:'lazy'}):ce('div',{style:{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text3)'}},ce(Icon,{name:'music',size:24})),
+      ce('div',{style:{position:'absolute',inset:0,background:'rgba(0,0,0,.4)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',opacity:active&&st.isPlaying?1:0,transition:'.2s'}},active&&st.isPlaying?ce(Icon,{name:'pause',size:20}):ce(Icon,{name:'play',size:20}))
+    ),
+    ce('div',{style:{padding:'10px 12px'}},
+      ce('span',{style:{display:'block',fontSize:13,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},track.name),
+      ce('span',{style:{display:'block',fontSize:11,color:'var(--text3)',marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},track.artist)
+    )
+  );
+}
+
+function TrackItem({track}){
+  const[st,setSt]=useState(state);useEffect(()=>subscribe(setSt),[]);
+  const active=st.currentTrack?.id===track.id;
+  const[favs,setFavs]=useState(JSON.parse(localStorage.getItem('pothole_favs')||'[]'));
+  const isFav=favs.some(f=>f.id===track.id);
+  const toggleFav=()=>{const n=isFav?favs.filter(f=>f.id!==track.id):[track,...favs];setFavs(n);localStorage.setItem('pothole_favs',JSON.stringify(n))};
+  return ce('div',{className:`item\${active?' active':''}`,style:{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',borderRadius:'var(--r)',cursor:'pointer',transition:'.2s',border:'1px solid transparent',background:active?'var(--card)':''},onClick:()=>playTrack(track)},
+    ce('div',{style:{position:'relative',width:44,height:44,borderRadius:'var(--r)',overflow:'hidden',background:'var(--bg3)',flexShrink:0}},
+      track.artwork?ce('img',{src:track.artwork,alt:'',style:{width:'100%',height:'100%',objectFit:'cover'},loading:'lazy'}):ce('div',{style:{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text3)'}},ce(Icon,{name:'music',size:16})),
+      active&&st.isPlaying?ce('div',{style:{position:'absolute',bottom:4,right:4,display:'flex',gap:2,alignItems:'flex-end'}},[0,1,2].map(i=>ce('span',{key:i,style:{width:3,height:8-i*2,background:'var(--accent)',borderRadius:1,animation:'pulse .8s ease-in-out infinite',animationDelay:`\${i*.2}s`}}))):null
+    ),
+    ce('div',{style:{flex:1,minWidth:0}},
+      ce('span',{style:{display:'block',fontSize:14,fontWeight:500,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},track.name),
+      ce('span',{style:{display:'block',fontSize:12,color:'var(--text3)',marginTop:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},track.artist)
+    ),
+    ce('button',{onClick:e=>{e.stopPropagation();toggleFav()},style:{background:'none',border:'none',color:isFav?'var(--danger)':'var(--text3)',padding:8,borderRadius:'50%',transition:'.2s'}},ce(Icon,{name:'heart',size:16}))
+  );
+}
+
+function StationItem({station}){
+  const track=radioToTrack(station);
+  return ce('div',{className:'item',style:{display:'flex',alignItems:'center',gap:12,padding:'10px 12px',borderRadius:'var(--r)',cursor:'pointer',transition:'.2s'},onClick:()=>playTrack(track)},
+    ce('div',{style:{width:44,height:44,borderRadius:'50%',overflow:'hidden',background:'var(--bg3)',flexShrink:0,position:'relative'}},
+      station.favicon?ce('img',{src:station.favicon,alt:'',style:{width:'100%',height:'100%',objectFit:'cover'},loading:'lazy'}):ce('div',{style:{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text3)'}},ce(Icon,{name:'radio',size:16})),
+      ce('span',{style:{position:'absolute',bottom:-2,right:-2,background:'var(--danger)',color:'white',fontSize:8,fontWeight:700,padding:'2px 5px',borderRadius:4}},'LIVE')
+    ),
+    ce('div',{style:{flex:1,minWidth:0}},
+      ce('span',{style:{display:'block',fontSize:14,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},station.name),
+      ce('span',{style:{display:'block',fontSize:12,color:'var(--text3)',marginTop:2}},station.country,station.bitrate?` · \${station.bitrate}kbps`:'')
+    )
+  );
+}
+
+function GenreCard({genre}){
+  const[loading,setLoading]=useState(false);
+  const handleClick=async()=>{setLoading(true);try{const t=await getJamendoGenre(genre,20);if(t.length>0){const tracks=t.map(jamendoToTrack);playTrack(tracks[0]);if(tracks.length>1)usePlayerStore.getState().setQueue(tracks.slice(1))}}catch(e){console.error(e)}finally{setLoading(false)}};
+  return ce('button',{onClick:handleClick,disabled:loading,style:{display:'flex',alignItems:'center',justifyContent:'space-between,padding:'14px 16px',background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--r)',color:'var(--text)',fontSize:14,fontWeight:500,textTransform:'capitalize'}},
+    ce('span',null,genre),loading?ce(Icon,{name:'disc',size:16,className:'spin'}):ce(Icon,{name:'chevron',size:16})
+  );
+}
+
+function PlayerBar(){
+  const[st,setSt]=useState(state);useEffect(()=>subscribe(setSt),[]);
+  if(!st.currentTrack)return null;
+  const progress=st.duration>0?(st.position/st.duration)*100:0;
+  return ce('div',{className:'slide-up',style:{position:'fixed',bottom:72,left:0,right:0,background:'var(--bg2)',borderTop:'1px solid var(--border)',zIndex:100,boxShadow:'0 -4px 24px rgba(0,0,0,.4)'}},
+    ce('div',{style:{height:3,background:'var(--active)',cursor:'pointer'},onClick:e=>{const r=e.currentTarget.getBoundingClientRect();seek(((e.clientX-r.left)/r.width)*(st.duration||0))}},
+      ce('div',{style:{height:'100%',width:`\${Math.min(progress,100)}%`,background:'linear-gradient(90deg,var(--accent),var(--accent2))',transition:'width .3s linear'}})
+    ),
+    ce('div',{style:{display:'flex',alignItems:'center',gap:12,padding:'10px 16px'}},
+      ce('div',{style:{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}},
+        ce('div',{style:{width:40,height:40,borderRadius:'var(--r)',overflow:'hidden',background:'var(--bg3)',flexShrink:0}},
+          st.currentTrack.artwork?ce('img',{src:st.currentTrack.artwork,alt:'',style:{width:'100%',height:'100%',objectFit:'cover',animation:st.isPlaying?'spin 3s linear infinite':'none'}}):ce('div',{style:{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text3)'}},ce(Icon,{name:'music',size:18}))
+        ),
+        ce('div',{style:{minWidth:0}},
+          ce('span',{style:{display:'block',fontSize:13,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},st.currentTrack.name),
+          ce('span',{style:{display:'block',fontSize:11,color:'var(--text3)'}},st.currentTrack.artist)
+        )
+      ),
+      ce('div',{style:{display:'flex',alignItems:'center',gap:8}},
+        ce('button',{onClick:()=>st.isPlaying?pause():resume(),style:{width:40,height:40,borderRadius:'50%',background:'var(--accent)',color:'white',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 2px 12px var(--glow)'}},
+          st.isLoading?ce(Icon,{name:'disc',size:20,className:'spin'}):st.isPlaying?ce(Icon,{name:'pause',size:20}):ce(Icon,{name:'play',size:20})
+        )
+      ),
+      ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        ce('button',{onClick:()=>setVol(st.volume>0?0:.8)},ce(Icon,{name:st.volume===0?'volumeX':'volume',size:16})),
+        ce('input',{type:'range',min:0,max:1,step:.01,value:st.volume,onChange:e=>setVol(parseFloat(e.target.value)),style:{width:70}})
+      )
+    ),
+    ce('div',{style:{display:'flex',justifyContent:'space-between',padding:'0 16px 6px',fontSize:10,color:'var(--text3)'}},ce('span',null,fmt(st.position)),ce('span',null,fmt(st.duration)))
+  );
+}
+
+// VIEWS
+function HomeView({nav}){
+  const[charts,setCharts]=useState([]);const[topRadio,setTopRadio]=useState([]);const[loading,setLoading]=useState(true);
+  useEffect(()=>{(async()=>{try{const[j,r]=await Promise.all([getJamendoCharts(10),getTopRadio(10)]);setCharts(j);setTopRadio(r)}catch(e){console.error(e)}finally{setLoading(false)}})()},[]);
+  return ce('div',{className:'view fade-in'},
+    ce('div',{style:{position:'relative',padding:'20px 16px 16px'}},
+      ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}},
+        ce('h1',{style:{fontSize:28,fontWeight:800}},'Pothole'),
+        ce('a',{href:'index.html',style:{fontSize:13,color:'var(--accent2)',textDecoration:'none'}},'← Home')
+      ),
+      ce('p',{style:{color:'var(--text2)',fontSize:14,marginBottom:16}},'Stream free music from around the world')
+    ),
+    ce('div',{style:{padding:'0 16px 16px'}},
+      ce('div',{style:{display:'flex',gap:8,overflowX:'auto',paddingBottom:4}},SEARCHES.map(q=>ce('button',{key:q,onClick:()=>nav('search'),style:{flexShrink:0,padding:'8px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'var(--r3)',color:'var(--text2)',fontSize:13,fontWeight:500,textTransform:'capitalize'}},q)))
+    ),
+    ce('section',{style:{padding:'0 16px 20px'}},
+      ce('h2',{style:{fontSize:18,fontWeight:700,marginBottom:12}},'📈 Top Tracks'),
+      loading?ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}},Array.from({length:6}).map((_,i)=>ce('div',{key:i,style:{background:'var(--bg3)',borderRadius:'var(--r)',aspectRatio:'1',animation:'pulse 1.5s ease-in-out infinite'}}))):ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}},charts.slice(0,6).map(t=>ce(TrackCard,{key:t.id,track:jamendoToTrack(t)})))
+    ),
+    ce('section',{style:{padding:'0 16px 20px'}},
+      ce('h2',{style:{fontSize:18,fontWeight:700,marginBottom:12}},'📻 Popular Radio'),
+      loading?ce('div',{style:{display:'flex',flexDirection:'column',gap:4}},Array.from({length:5}).map((_,i)=>ce('div',{key:i,style:{height:60,background:'var(--bg3)',borderRadius:'var(--r)',animation:'pulse 1.5s ease-in-out infinite'}}))):ce('div',{style:{display:'flex',flexDirection:'column',gap:4}},topRadio.slice(0,5).map(s=>ce(StationItem,{key:s.stationuuid,station:s})))
+    ),
+    ce('section',{style:{padding:'0 16px 20px'}},
+      ce('h2',{style:{fontSize:18,fontWeight:700,marginBottom:12}},'🎸 Genres'),
+      ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8}},GENRES.slice(0,12).map(g=>ce(GenreCard,{key:g,genre:g})))
+    )
+  );
+}
+
+function SearchView({nav}){
+  const[query,setQuery]=useState('');const[results,setResults]=useState({jamendo:[],radio:[]});const[tab,setTab]=useState('music');const[loading,setLoading]=useState(false);
+  const handleSearch=async(q)=>{if(!q.trim())return;setLoading(true);try{const[j,r]=await Promise.all([searchJamendo(q,30),searchRadio(q,20)]);setResults({jamendo:j,radio:r})}catch(e){console.error(e)}finally{setLoading(false)}};
+  return ce('div',{className:'view fade-in'},
+    ce('div',{style:{padding:16,position:'sticky',top:0,background:'var(--bg)',zIndex:10}},
+      ce('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:12}},
+        ce('button',{onClick:()=>nav('home'),style:{padding:8,color:'var(--text2)'}},ce(Icon,{name:'arrowLeft',size:20})),
+        ce('h1',{style:{fontSize:20,fontWeight:700}},'Search')
+      ),
+      ce('div',{style:{position:'relative',display:'flex',alignItems:'center'}},
+        ce(Icon,{name:'search',size:18,style:{position:'absolute',left:14,color:'var(--text3)'}}),
+        ce('input',{type:'text',placeholder:'Search music, artists, radio...',value:query,onChange:e=>setQuery(e.target.value),onKeyDown:e=>e.key==='Enter'&&handleSearch(query),style:{width:'100%',padding:'14px 40px 14px 42px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'var(--r3)',color:'var(--text)',fontSize:15,outline:'none'}}),
+        query?ce('button',{onClick:()=>{setQuery('');setResults({jamendo:[],radio:[]})},style:{position:'absolute',right:12,background:'none',border:'none',color:'var(--text3)',padding:4}},ce(Icon,{name:'x',size:16})):null
+      ),
+      ce('div',{style:{display:'flex',gap:8,marginTop:12}},
+        ce('button',{onClick:()=>setTab('music'),style:{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',background:tab==='music'?'var(--accent)':'var(--bg3)',border:'1px solid '+(tab==='music'?'var(--accent)':'var(--border)'),borderRadius:'var(--r3)',color:tab==='music'?'white':'var(--text2)',fontSize:13,fontWeight:500}},ce(Icon,{name:'music',size:16}),'Music'),
+        ce('button',{onClick:()=>setTab('radio'),style:{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',background:tab==='radio'?'var(--accent)':'var(--bg3)',border:'1px solid '+(tab==='radio'?'var(--accent)':'var(--border)'),borderRadius:'var(--r3)',color:tab==='radio'?'white':'var(--text2)',fontSize:13,fontWeight:500}},ce(Icon,{name:'radio',size:16}),'Radio')
+      )
+    ),
+    !results.jamendo.length&&!results.radio.length&&!loading?ce('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'60px 32px',textAlign:'center',color:'var(--text3)'}},
+      ce(Icon,{name:'music',size:48}),ce('h3',{style:{fontSize:18,fontWeight:600,color:'var(--text2)',margin:'16px 0 8px'}},'Search for music'),
+      ce('p',{style:{fontSize:14}},'Find songs, artists, or radio stations'),
+      ce('div',{style:{display:'flex',gap:8,flexWrap:'wrap',justifyContent:'center',marginTop:16}},SEARCHES.slice(0,6).map(q=>ce('button',{key:q,onClick:()=>{setQuery(q);handleSearch(q)},style:{padding:'8px 16px',background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'var(--r3)',color:'var(--text2)',fontSize:13,textTransform:'capitalize'}},q)))
+    ):loading?ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,padding:'0 16px'}},Array.from({length:6}).map((_,i)=>ce('div',{key:i,style:{background:'var(--bg3)',borderRadius:'var(--r)',aspectRatio:'1',animation:'pulse 1.5s ease-in-out infinite'}}))):ce(Fragment,null,
+      tab==='music'&&results.jamendo.length>0?ce('div',{style:{display:'flex',flexDirection:'column',gap:4,padding:'0 12px'}},results.jamendo.map(t=>ce(TrackItem,{key:t.id,track:jamendoToTrack(t)}))):null,
+      tab==='radio'&&results.radio.length>0?ce('div',{style:{display:'flex',flexDirection:'column',gap:4,padding:'0 12px'}},results.radio.map(s=>ce(StationItem,{key:s.stationuuid,station:s}))):null
+    )
+  );
+}
+
+function RadioView({nav}){
+  const[stations,setStations]=useState([]);const[genre,setGenre]=useState('');const[loading,setLoading]=useState(true);
+  const load=async(g)=>{setLoading(true);try{const d=await(g?getRadioGenre(g,30):getTopRadio(30));setStations(d)}catch(e){console.error(e)}finally{setLoading(false)}};
+  useEffect(()=>{load()},[]);
+  return ce('div',{className:'view fade-in'},
+    ce('div',{style:{padding:'20px 16px 16px'}},
+      ce('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:16}},
+        ce('button',{onClick:()=>nav('home'),style:{padding:8,color:'var(--text2)'}},ce(Icon,{name:'arrowLeft',size:20})),
+        ce('h1',{style:{fontSize:24,fontWeight:800}},'📻 Live Radio')
+      ),
+      ce('p',{style:{color:'var(--text2)',fontSize:14}},'Stream radio stations worldwide')
+    ),
+    ce('div',{style:{display:'flex',gap:8,overflowX:'auto',padding:'0 16px 16px'}},
+      ce('button',{onClick:()=>{setGenre('');load()},style:{flexShrink:0,padding:'8px 16px',background:!genre?'var(--accent)':'var(--bg3)',border:'1px solid '+(!genre?'var(--accent)':'var(--border)'),borderRadius:'var(--r3)',color:!genre?'white':'var(--text2)',fontSize:13,fontWeight:500}},'All'),
+      GENRES.slice(0,10).map(g=>ce('button',{key:g,onClick:()=>{setGenre(g);load(g)},style:{flexShrink:0,padding:'8px 16px',background:genre===g?'var(--accent)':'var(--bg3)',border:'1px solid '+(genre===g?'var(--accent)':'var(--border)'),borderRadius:'var(--r3)',color:genre===g?'white':'var(--text2)',fontSize:13,fontWeight:500,textTransform:'capitalize'}},g))
+    ),
+    loading?ce('div',{style:{display:'flex',flexDirection:'column',gap:4,padding:'0 12px'}},Array.from({length:8}).map((_,i)=>ce('div',{key:i,style:{height:60,background:'var(--bg3)',borderRadius:'var(--r)',animation:'pulse 1.5s ease-in-out infinite'}}))):ce('div',{style:{display:'flex',flexDirection:'column',gap:4,padding:'0 12px'}},stations.map(s=>ce(StationItem,{key:s.stationuuid,station:s})))
+  );
+}
+
+function FavoritesView({nav}){
+  const[favs,setFavs]=useState(JSON.parse(localStorage.getItem('pothole_favs')||'[]'));
+  return ce('div',{className:'view fade-in'},
+    ce('div',{style:{padding:'20px 16px 16px'}},
+      ce('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:16}},
+        ce('button',{onClick:()=>nav('home'),style:{padding:8,color:'var(--text2)'}},ce(Icon,{name:'arrowLeft',size:20})),
+        ce('h1',{style:{fontSize:24,fontWeight:800}},'❤️ Favorites')
+      )
+    ),
+    favs.length>0?ce('div',{style:{display:'flex',flexDirection:'column',gap:4,padding:'0 12px'}},favs.map(t=>ce(TrackItem,{key:t.id,track:t}))):ce('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'60px 32px',textAlign:'center',color:'var(--text3)'}},
+      ce(Icon,{name:'heart',size:48}),ce('h3',{style:{fontSize:18,fontWeight:600,color:'var(--text2)',margin:'16px 0 8px'}},'No favorites yet'),
+      ce('p',{style:{fontSize:14}},'Tap the heart on any track to save it')
+    )
+  );
+}
+
+// MAIN APP
+function App(){
+  const[view,setView]=useState('home');
+  const views={home:HomeView,search:SearchView,radio:RadioView,favorites:FavoritesView};
+  const VC=views[view]||HomeView;
+  return ce(Fragment,null,
+    ce('main',{style:{flex:1,overflowY:'auto',overflowX:'hidden',paddingBottom:160}},ce(VC,{nav:setView})),
+    ce(PlayerBar,null),
+    ce('nav',{style:{position:'fixed',bottom:0,left:0,right:0,display:'flex',alignItems:'center',justifyContent:'spaceAround',background:'var(--bg2)',borderTop:'1px solid var(--border)',padding:'8px 0',zIndex:100}},
+      [{id:'home',icon:'home',label:'Home'},{id:'search',icon:'search',label:'Search'},{id:'radio',icon:'radio',label:'Radio'},{id:'favorites',icon:'heart',label:'Favs'}].map(n=>ce('button',{key:n.id,onClick:()=>setView(n.id),style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'6px 12px',background:'none',border:'none',color:view===n.id?'var(--accent)':'var(--text3)',fontSize:10,fontWeight:500}},ce(Icon,{name:n.icon,size:20}),n.label))
+    )
+  );
+}
+
+createRoot(document.getElementById('root')).render(ce(App,null));
+</script>
+<style>
+.view{padding-bottom:120px}
+.card:hover{transform:translateY(-2px);border-color:var(--accent)}
+.card.active{border-color:var(--accent);box-shadow:0 0 20px var(--glow)}
+.item:hover{background:var(--card)}
+.item.active{border-color:var(--accent)}
+</style>
+</body>
+</html>
